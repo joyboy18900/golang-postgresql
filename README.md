@@ -137,6 +137,15 @@ automatic rebalancing. A production setup would add `pg_partman` or a cron
 job to pre-create next month's partition ahead of time; both are out of
 scope here.
 
+Migration `0003` also leaves the pre-partition table behind, renamed to
+`audit_log_unpartitioned` - it is never dropped by `up`, because `down`
+renames it back into place to roll the migration back. That means once
+partitioned, both copies of the data sit on disk at once (the full
+pre-partition snapshot plus the partitioned copy), and rolling `0003` back
+restores that snapshot rather than current state - any rows written after
+partitioning are not in `audit_log_unpartitioned` and are lost from a
+rollback's point of view.
+
 ## API
 
 Two endpoints, standard envelope (`{code, message, data}`):
