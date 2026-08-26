@@ -48,35 +48,47 @@ func ParsePlan(rawJSON string) (*QueryPlanResult, error) {
 	}
 
 	output := outputs[0]
-	scanNode, found := findScanNode(output.Plan)
+	scan, found := findScanNode(output.Plan)
 	if !found {
-		scanNode = output.Plan
+		scan = scanMatch{node: output.Plan}
 	}
 
-	summary := fmt.Sprintf("%s, Execution Time: %.2f ms", describeScanNode(scanNode), output.ExecutionTime)
+	summary := fmt.Sprintf("%s, Execution Time: %.2f ms", describeScanNode(scan), output.ExecutionTime)
 
 	return &QueryPlanResult{Summary: summary, RawPlan: rawJSON}, nil
 }
 
-func findScanNode(node planNode) (planNode, bool) {
-	if strings.Contains(node.NodeType, "Seq Scan") || strings.Contains(node.NodeType, "Index Scan") {
-		return node, true
+type scanMatch struct {
+	node      planNode
+	indexName string
+}
+
+func findScanNode(node planNode) (scanMatch, bool) {
+	switch {
+	case strings.Contains(node.NodeType, "Bitmap Heap Scan"):
+		indexName := ""
+		if len(node.Plans) > 0 {
+			indexName = node.Plans[0].IndexName
+		}
+		return scanMatch{node: node, indexName: indexName}, true
+	case strings.Contains(node.NodeType, "Seq Scan"), strings.Contains(node.NodeType, "Index Scan"):
+		return scanMatch{node: node, indexName: node.IndexName}, true
 	}
 	for _, child := range node.Plans {
 		if found, ok := findScanNode(child); ok {
 			return found, true
 		}
 	}
-	return planNode{}, false
+	return scanMatch{}, false
 }
 
-func describeScanNode(node planNode) string {
+func describeScanNode(s scanMatch) string {
 	switch {
-	case strings.Contains(node.NodeType, "Index Scan") && node.IndexName != "":
-		return fmt.Sprintf("Index Scan using %s on %s", node.IndexName, node.RelationName)
-	case node.RelationName != "":
-		return fmt.Sprintf("%s on %s", node.NodeType, node.RelationName)
+	case s.indexName != "":
+		return fmt.Sprintf("%s using %s on %s", s.node.NodeType, s.indexName, s.node.RelationName)
+	case s.node.RelationName != "":
+		return fmt.Sprintf("%s on %s", s.node.NodeType, s.node.RelationName)
 	default:
-		return node.NodeType
+		return s.node.NodeType
 	}
 }
