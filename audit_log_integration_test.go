@@ -25,11 +25,11 @@ import (
 )
 
 const (
-	cursorTestActorID = 7
-	fixtureRowCount   = 2500
-	tieRowCount       = 25
-	pageLimit         = 20
-	maxPageWalk       = 1000
+	paginationTestActorID = 7
+	fixtureRowCount       = 2500
+	tieRowCount           = 25
+	pageLimit             = 20
+	maxPageWalk           = 1000
 )
 
 const (
@@ -235,6 +235,7 @@ func TestAuditLogHandler_ListRequiresActorID(t *testing.T) {
 }
 
 type auditLogFixtureRow struct {
+	ID         int64
 	ActorID    int64
 	Action     string
 	EntityType string
@@ -244,10 +245,10 @@ type auditLogFixtureRow struct {
 
 func (auditLogFixtureRow) TableName() string { return "audit_log" }
 
-func TestAuditLogCursorPagination(t *testing.T) {
+func TestAuditLogOffsetPagination(t *testing.T) {
 	db := connectTestGormDB(t)
 
-	if err := db.Exec("DELETE FROM audit_log WHERE actor_id = ?", cursorTestActorID).Error; err != nil {
+	if err := db.Exec("DELETE FROM audit_log WHERE actor_id = ?", paginationTestActorID).Error; err != nil {
 		t.Fatalf("reset fixture rows: %v", err)
 	}
 
@@ -259,7 +260,7 @@ func TestAuditLogCursorPagination(t *testing.T) {
 			createdAt = base
 		}
 		rows[i] = auditLogFixtureRow{
-			ActorID:    cursorTestActorID,
+			ActorID:    paginationTestActorID,
 			Action:     "login",
 			EntityType: "session",
 			Metadata:   []byte("{}"),
@@ -271,7 +272,7 @@ func TestAuditLogCursorPagination(t *testing.T) {
 	}
 
 	var tieCount int64
-	err := db.Raw("SELECT COUNT(*) FROM audit_log WHERE actor_id = ? AND created_at = ?", cursorTestActorID, base).
+	err := db.Raw("SELECT COUNT(*) FROM audit_log WHERE actor_id = ? AND created_at = ?", paginationTestActorID, base).
 		Scan(&tieCount).Error
 	if err != nil {
 		t.Fatalf("count tie rows: %v", err)
@@ -281,46 +282,123 @@ func TestAuditLogCursorPagination(t *testing.T) {
 			tieRowCount, base, tieCount)
 	}
 
+	expectedIDs := make(map[int64]bool, fixtureRowCount)
+	for _, row := range rows {
+		expectedIDs[row.ID] = true
+	}
+
 	repo := repository.NewAuditLogRepositoryDB(db)
 	svc := service.NewAuditLogService(repo)
 
-	seen := make(map[int64]bool, fixtureRowCount)
-
 	first, err := svc.ListByActor(context.Background(), service.ListAuditLogRequest{
-		ActorID: cursorTestActorID,
+		ActorID: paginationTestActorID,
 		Page:    1,
 		Limit:   pageLimit,
 	})
 	if err != nil {
 		t.Fatalf("list page 1: %v", err)
 	}
+	if first.Pagination.TotalItems != fixtureRowCount {
+		t.Fatalf("total_items = %d, want %d", first.Pagination.TotalItems, fixtureRowCount)
+	}
 	totalPages := first.Pagination.TotalPages
 	if totalPages <= 0 || totalPages > maxPageWalk {
 		t.Fatalf("total_pages = %d, want a value in (0, %d]", totalPages, maxPageWalk)
 	}
-	for _, item := range first.Data {
-		seen[item.ID] = true
-	}
 
-	for page := 2; page <= totalPages; page++ {
-		resp, err := svc.ListByActor(context.Background(), service.ListAuditLogRequest{
-			ActorID: cursorTestActorID,
-			Page:    page,
-			Limit:   pageLimit,
-		})
-		if err != nil {
-			t.Fatalf("list page %d: %v", page, err)
+	seen := make(map[int64]bool, fixtureRowCount)
+	var tiePage int
+	pageItems := make(map[int][]service.AuditLogResponse, totalPages)
+
+	for page := 1; page <= totalPages; page++ {
+		resp := first
+		if page != 1 {
+			resp2, err := svc.ListByActor(context.Background(), service.ListAuditLogRequest{
+				ActorID: paginationTestActorID,
+				Page:    page,
+				Limit:   pageLimit,
+			})
+			if err != nil {
+				t.Fatalf("list page %d: %v", page, err)
+			}
+			resp = resp2
 		}
 
+		pageItems[page] = resp.Data
 		for _, item := range resp.Data {
 			if seen[item.ID] {
 				t.Fatalf("duplicate id %d on page %d", item.ID, page)
 			}
 			seen[item.ID] = true
 		}
+
+		for i := 1; i < len(resp.Data); i++ {
+			if resp.Data[i-1].CreatedAt.Equal(resp.Data[i].CreatedAt) {
+				tiePage = page
+			}
+		}
 	}
 
 	if len(seen) != fixtureRowCount {
 		t.Fatalf("walked %d distinct rows, want %d", len(seen), fixtureRowCount)
+	}
+	for id := range expectedIDs {
+		if !seen[id] {
+			t.Fatalf("seeded id %d never appeared in any page", id)
+		}
+	}
+
+	if tiePage == 0 {
+		t.Fatalf("no page contained two consecutive rows sharing created_at - tiebreak is not exercised")
+	}
+
+	repeat, err := svc.ListByActor(context.Background(), service.ListAuditLogRequest{
+		ActorID: paginationTestActorID,
+		Page:    tiePage,
+		Limit:   pageLimit,
+	})
+	if err != nil {
+		t.Fatalf("list tie page %d again: %v", tiePage, err)
+	}
+
+	want := pageItems[tiePage]
+	if len(repeat.Data) != len(want) {
+		t.Fatalf("tie page %d: repeat request returned %d rows, want %d", tiePage, len(repeat.Data), len(want))
+	}
+	for i := range want {
+		if repeat.Data[i].ID != want[i].ID {
+			t.Fatalf("tie page %d: id order changed between requests at position %d: got %d, want %d",
+				tiePage, i, repeat.Data[i].ID, want[i].ID)
+		}
+	}
+	for i := 1; i < len(want); i++ {
+		if want[i-1].CreatedAt.Equal(want[i].CreatedAt) && want[i-1].ID <= want[i].ID {
+			t.Fatalf("tie page %d: tied rows not in strict id DESC order: id[%d]=%d, id[%d]=%d",
+				tiePage, i-1, want[i-1].ID, i, want[i].ID)
+		}
+	}
+
+	past, err := svc.ListByActor(context.Background(), service.ListAuditLogRequest{
+		ActorID: paginationTestActorID,
+		Page:    totalPages + 1,
+		Limit:   pageLimit,
+	})
+	if err != nil {
+		t.Fatalf("list past-the-end page: %v", err)
+	}
+	if len(past.Data) != 0 {
+		t.Fatalf("past-the-end page: got %d rows, want 0", len(past.Data))
+	}
+	if past.Data == nil {
+		t.Fatal("past-the-end page: Data is nil, want a non-nil empty slice")
+	}
+	if past.Pagination.Page != totalPages+1 {
+		t.Fatalf("past-the-end page: pagination.page = %d, want %d", past.Pagination.Page, totalPages+1)
+	}
+	if past.Pagination.TotalItems != fixtureRowCount {
+		t.Fatalf("past-the-end page: pagination.total_items = %d, want %d", past.Pagination.TotalItems, fixtureRowCount)
+	}
+	if past.Pagination.TotalPages != totalPages {
+		t.Fatalf("past-the-end page: pagination.total_pages = %d, want %d", past.Pagination.TotalPages, totalPages)
 	}
 }
