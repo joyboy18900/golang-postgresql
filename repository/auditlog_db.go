@@ -65,7 +65,8 @@ func (r auditLogRepositoryDB) ListByActor(ctx context.Context, actorID int64, li
 
 func (r auditLogRepositoryDB) CopyInsert(ctx context.Context, entries []AuditLog) (int64, error) {
 	rows := make([][]any, len(entries))
-	for i, entry := range entries {
+	for i := range entries {
+		entry := &entries[i]
 		rows[i] = []any{entry.ActorID, entry.Action, entry.EntityType, entry.EntityID, entry.Metadata, entry.CreatedAt}
 	}
 
