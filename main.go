@@ -173,7 +173,7 @@ func runBench(args []string) {
 	repo := repository.NewAuditLogRepositoryDB(pool)
 	benchSvc := service.NewBenchService(repo)
 
-	result, err := benchSvc.ListByActorPlan(context.Background(), actorID, 50)
+	result, err := benchSvc.ListByActorPlan(context.Background(), actorID, service.DefaultListLimit)
 	if err != nil {
 		panic(fmt.Errorf("bench: %w", err))
 	}
