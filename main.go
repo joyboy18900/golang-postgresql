@@ -24,17 +24,13 @@ func main() {
 	initConfig()
 
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: go run . <migrate|seed|bench|serve> [args]")
+		fmt.Fprintln(os.Stderr, "usage: go run . <migrate|serve> [args]")
 		os.Exit(1)
 	}
 
 	switch os.Args[1] {
 	case "migrate":
 		runMigrate(os.Args[2:])
-	case "seed":
-		runSeed(os.Args[2:])
-	case "bench":
-		runBench(os.Args[2:])
 	case "serve":
 		runServe()
 	default:
@@ -125,61 +121,6 @@ func runMigrate(args []string) {
 	}
 
 	logs.Info("migrate " + args[0] + " complete")
-}
-
-func runSeed(args []string) {
-	rowCount := viper.GetInt("seed.row_count")
-	if len(args) >= 1 {
-		var err error
-		rowCount, err = strconv.Atoi(args[0])
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "row count must be an integer")
-			os.Exit(1)
-		}
-	}
-	if rowCount <= 0 {
-		fmt.Fprintln(os.Stderr, "usage: seed [rowCount] (or set seed.row_count in config.yaml)")
-		os.Exit(1)
-	}
-
-	pool := initPool()
-	defer pool.Close()
-
-	repo := repository.NewAuditLogRepositoryDB(pool)
-	seedSvc := service.NewSeedService(repo, viper.GetInt("seed.actor_cardinality"), viper.GetInt("seed.batch_size"))
-
-	inserted, err := seedSvc.Seed(context.Background(), rowCount)
-	if err != nil {
-		panic(fmt.Errorf("seed: %w", err))
-	}
-
-	logs.Info(fmt.Sprintf("seeded %d rows total", inserted))
-}
-
-func runBench(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: bench actorID")
-		os.Exit(1)
-	}
-	actorID, err := strconv.ParseInt(args[0], 10, 64)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "actorID must be an integer")
-		os.Exit(1)
-	}
-
-	pool := initPool()
-	defer pool.Close()
-
-	repo := repository.NewAuditLogRepositoryDB(pool)
-	benchSvc := service.NewBenchService(repo)
-
-	result, err := benchSvc.ListByActorPlan(context.Background(), actorID, service.DefaultListLimit)
-	if err != nil {
-		panic(fmt.Errorf("bench: %w", err))
-	}
-
-	fmt.Println(result.Summary)
-	fmt.Println(result.RawPlan)
 }
 
 func runServe() {

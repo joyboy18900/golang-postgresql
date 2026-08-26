@@ -27,24 +27,10 @@ services:
       DB_SSLMODE: disable
     command: ["migrate", "up"]
 
-  seed:
-    build: .
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: golang_postgresql
-      DB_SSLMODE: disable
-    command: ["seed", "1000000"]
-
   app:
     build: .
     depends_on:
-      seed:
+      migrate:
         condition: service_completed_successfully
     environment:
       APP_PORT: 8080
