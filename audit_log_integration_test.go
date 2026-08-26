@@ -3,15 +3,14 @@ package main_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"golang-postgresql/handler"
+	"golang-postgresql/mock/mock_repository"
 	"golang-postgresql/repository"
 	"golang-postgresql/service"
 
@@ -20,6 +19,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.uber.org/mock/gomock"
 )
 
 const (
@@ -192,60 +192,7 @@ func TestAuditLogMigrationsAndQueryPlan(t *testing.T) {
 	})
 }
 
-type fakeAuditLogRepository struct {
-	mu      sync.Mutex
-	entries map[int64]repository.AuditLog
-	nextID  int64
-}
-
-func newFakeAuditLogRepository() *fakeAuditLogRepository {
-	return &fakeAuditLogRepository{entries: make(map[int64]repository.AuditLog), nextID: 1}
-}
-
-func (f *fakeAuditLogRepository) Create(_ context.Context, entry repository.AuditLog) (*repository.AuditLog, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	entry.ID = f.nextID
-	f.nextID++
-	entry.CreatedAt = time.Now()
-	f.entries[entry.ID] = entry
-
-	created := entry
-	return &created, nil
-}
-
-func (f *fakeAuditLogRepository) ListByActor(_ context.Context, actorID int64, limit int) ([]repository.AuditLog, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	var results []repository.AuditLog
-	for _, entry := range f.entries {
-		if entry.ActorID == actorID {
-			results = append(results, entry)
-		}
-	}
-	if len(results) > limit {
-		results = results[:limit]
-	}
-
-	return results, nil
-}
-
-func (f *fakeAuditLogRepository) CopyInsert(_ context.Context, _ []repository.AuditLog) (int64, error) {
-	return 0, errors.New("not implemented")
-}
-
-func (f *fakeAuditLogRepository) Analyze(_ context.Context) error {
-	return nil
-}
-
-func (f *fakeAuditLogRepository) ExplainListByActor(_ context.Context, _ int64, _ int) (string, error) {
-	return "", errors.New("not implemented")
-}
-
-func newHandlerTestApp() *fiber.App {
-	repo := newFakeAuditLogRepository()
+func newHandlerTestApp(repo repository.AuditLogRepository) *fiber.App {
 	svc := service.NewAuditLogService(repo)
 	hdlr := handler.NewAuditLogHandler(svc)
 
@@ -257,7 +204,17 @@ func newHandlerTestApp() *fiber.App {
 }
 
 func TestAuditLogHandler_CreateAndList(t *testing.T) {
-	app := newHandlerTestApp()
+	ctrl := gomock.NewController(t)
+	repo := mock_repository.NewMockAuditLogRepository(ctrl)
+
+	created := repository.AuditLog{
+		ID: 1, ActorID: 42, Action: "login", EntityType: "session",
+		Metadata: map[string]any{}, CreatedAt: time.Now(),
+	}
+	repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&created, nil)
+	repo.EXPECT().ListByActor(gomock.Any(), int64(42), gomock.Any()).Return([]repository.AuditLog{created}, nil)
+
+	app := newHandlerTestApp(repo)
 
 	createReq := httptest.NewRequest(fiber.MethodPost, "/audit-log", strings.NewReader(
 		`{"actor_id":42,"action":"login","entity_type":"session"}`,
@@ -294,7 +251,9 @@ func TestAuditLogHandler_CreateAndList(t *testing.T) {
 }
 
 func TestAuditLogHandler_ListRequiresActorID(t *testing.T) {
-	app := newHandlerTestApp()
+	ctrl := gomock.NewController(t)
+	repo := mock_repository.NewMockAuditLogRepository(ctrl)
+	app := newHandlerTestApp(repo)
 
 	req := httptest.NewRequest(fiber.MethodGet, "/audit-log", nil)
 
