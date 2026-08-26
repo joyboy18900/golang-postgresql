@@ -77,24 +77,6 @@ ms`.
 | audit_log_y2026m07 | 251,591 |
 | audit_log_y2026m08 | 252,077 |
 
-## Key Technical Takeaways / Gotchas
-
-- Partitioned by month on `created_at`: audit logs are append-only and
-  queried by recency, so writes/range-reads land in one partition and old
-  months drop with `DROP TABLE` instead of row-by-row `DELETE`.
-- The actor-lookup query doesn't prune (`actor_id` isn't the partition
-  key) - it still checks every partition. Partitioning and the index
-  solve different problems; both are needed.
-- Rows outside the four declared months land in `audit_log_default`;
-  moving them into a real partition needs a manual `DETACH PARTITION` +
-  backfill, no automatic rebalancing.
-- Migration `0003` leaves the pre-partition table as
-  `audit_log_unpartitioned` (needed for `down`) - rolling back restores
-  that old snapshot, not current state.
-- `migrate`/`seed`/`bench` stay CLI subcommands (`go run . <cmd>`), not
-  endpoints - one-time proof steps, not things an API client should
-  trigger.
-
 ## API
 
 - `POST /audit-log` - create one entry
@@ -102,13 +84,6 @@ ms`.
   defaults to 50)
 
 See `curl/flow.md` for examples.
-
-## Not done on purpose
-
-- No `pg_partman`/cron-based automatic future-partition creation, no
-  `DEFAULT`-partition rebalancing tooling.
-- No retry/backoff on seeding.
-- No auth on the API (see `golang-fiber-jwt-auth`).
 
 ## Tests
 
