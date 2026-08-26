@@ -10,11 +10,13 @@ import (
 	"golang-postgresql/repository"
 )
 
-var seedActions = []string{"create", "update", "delete", "login", "logout"}
-var seedEntityTypes = []string{"user", "order", "invoice", "session"}
-
-var seedWindowStart = time.Date(2026, time.May, 1, 0, 0, 0, 0, time.UTC)
-var seedWindowEnd = time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+var (
+	seedActions     = []string{"create", "update", "delete", "login", "logout"}
+	seedEntityTypes = []string{"user", "order", "invoice", "session"}
+	seedWindowStart = time.Date(2026, time.May, 1, 0, 0, 0, 0, time.UTC)
+	seedWindowEnd   = time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+	emptyMetadata   = map[string]any{}
+)
 
 type seedService struct {
 	repo             repository.AuditLogRepository
@@ -28,6 +30,7 @@ func NewSeedService(repo repository.AuditLogRepository, actorCardinality int, ba
 
 func (s seedService) Seed(ctx context.Context, rowCount int) (int64, error) {
 	var inserted int64
+	scratch := make([]repository.AuditLog, s.batchSize)
 
 	for remaining := rowCount; remaining > 0; {
 		batchSize := s.batchSize
@@ -35,7 +38,7 @@ func (s seedService) Seed(ctx context.Context, rowCount int) (int64, error) {
 			batchSize = remaining
 		}
 
-		batch := make([]repository.AuditLog, batchSize)
+		batch := scratch[:batchSize]
 		for i := range batch {
 			batch[i] = randomAuditLog(s.actorCardinality)
 		}
@@ -62,7 +65,7 @@ func randomAuditLog(actorCardinality int) repository.AuditLog {
 		ActorID:    int64(rand.Intn(actorCardinality)) + 1,
 		Action:     seedActions[rand.Intn(len(seedActions))],
 		EntityType: seedEntityTypes[rand.Intn(len(seedEntityTypes))],
-		Metadata:   map[string]any{},
+		Metadata:   emptyMetadata,
 		CreatedAt:  randomTimeBetween(seedWindowStart, seedWindowEnd),
 	}
 }
