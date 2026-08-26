@@ -10,7 +10,7 @@ docker compose ps
 docker compose logs app --tail 20   # should show "server started on port 8080"
 ```
 
-## 1. Create an audit log entry
+## 1. Create audit log entries
 
 ```bash
 curl -X POST http://localhost:8080/audit-log \
@@ -19,7 +19,17 @@ curl -X POST http://localhost:8080/audit-log \
 ```
 
 ```json
-{ "code": 201, "message": "audit log entry created", "data": { "id": 1, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-26T08:25:03.9061Z" } }
+{ "code": 201, "message": "audit log entry created", "data": { "id": 1, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-27T08:25:03.9061Z" } }
+```
+
+```bash
+curl -X POST http://localhost:8080/audit-log \
+  -H "Content-Type: application/json" \
+  -d '{"actor_id":42,"action":"logout","entity_type":"session"}'
+```
+
+```json
+{ "code": 201, "message": "audit log entry created", "data": { "id": 2, "actor_id": 42, "action": "logout", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-27T08:25:04.1122Z" } }
 ```
 
 ## 2. List an actor's activity history
@@ -29,19 +39,30 @@ curl "http://localhost:8080/audit-log?actor_id=42"
 ```
 
 ```json
-{ "code": 200, "message": "audit log entries retrieved", "data": { "items": [ { "id": 1, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-26T08:25:03.9061Z" } ], "next_cursor": null } }
+{ "code": 200, "message": "audit log entries retrieved", "data": { "data": [ { "id": 2, "actor_id": 42, "action": "logout", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-27T08:25:04.1122Z" }, { "id": 1, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-27T08:25:03.9061Z" } ], "pagination": { "page": 1, "limit": 50, "total_items": 2, "total_pages": 1 } } }
 ```
 
 `limit` defaults to 50 and can be overridden: `?actor_id=42&limit=10`.
 
-## 3. Walk pages with the cursor
+## 3. Walk pages
 
-When a page is full, `next_cursor` is a non-null string. Pass it back as
-`cursor` to fetch the next page; keep going until `next_cursor` is `null`.
+`page` defaults to 1. Pass `page` and `limit` together to page through the
+results; `pagination.total_pages` tells the client when to stop.
 
 ```bash
-curl "http://localhost:8080/audit-log?actor_id=42&limit=10"
-curl "http://localhost:8080/audit-log?actor_id=42&limit=10&cursor=MTc4NzczMjcwMzkwNjEyMzo0Mg"
+curl "http://localhost:8080/audit-log?actor_id=42&page=1&limit=1"
+```
+
+```json
+{ "code": 200, "message": "audit log entries retrieved", "data": { "data": [ { "id": 2, "actor_id": 42, "action": "logout", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-27T08:25:04.1122Z" } ], "pagination": { "page": 1, "limit": 1, "total_items": 2, "total_pages": 2 } } }
+```
+
+```bash
+curl "http://localhost:8080/audit-log?actor_id=42&page=2&limit=1"
+```
+
+```json
+{ "code": 200, "message": "audit log entries retrieved", "data": { "data": [ { "id": 1, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-27T08:25:03.9061Z" } ], "pagination": { "page": 2, "limit": 1, "total_items": 2, "total_pages": 2 } } }
 ```
 
 ## 4. Rejection cases
@@ -56,14 +77,14 @@ curl "http://localhost:8080/audit-log"
 { "code": 422, "message": "actor_id query parameter is required", "data": null }
 ```
 
-Malformed `cursor`:
+`page` must be a positive integer:
 
 ```bash
-curl "http://localhost:8080/audit-log?actor_id=42&cursor=not-a-cursor"
+curl "http://localhost:8080/audit-log?actor_id=42&page=0"
 ```
 
 ```json
-{ "code": 422, "message": "invalid cursor", "data": null }
+{ "code": 422, "message": "page must be a positive integer", "data": null }
 ```
 
 Missing required fields on create:

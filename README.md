@@ -1,7 +1,7 @@
 # golang-postgresql
 
 Fiber + GORM + Postgres reference: one entity, `audit_log`, with versioned
-migrations and cursor-based (keyset) pagination on its actor-activity
+migrations and offset (page-number) pagination on its actor-activity
 listing query.
 
 ## Run
@@ -20,7 +20,7 @@ The app runs pending migrations on startup, then serves on `:8080`. See
 ## Endpoints
 
 - `POST /audit-log`
-- `GET /audit-log?actor_id=X&limit=Y&cursor=Z`
+- `GET /audit-log?actor_id=X&page=N&limit=Y`
 
 See `curl/flow.md` for full request/response examples.
 
@@ -36,24 +36,8 @@ See `curl/flow.md` for full request/response examples.
    created_at DESC)`, covering the listing query's `WHERE` and `ORDER BY`.
    The index does not include `id`, so rows sharing the exact same
    `created_at` are ordered by a small in-memory sort rather than the
-   index alone - correctness is unaffected, since the `id DESC` tiebreak
-   is enforced by the query itself.
-
-## Pagination
-
-`GET /audit-log` uses keyset pagination, not offset. A cursor is an opaque
-base64 string encoding `created_at` (microseconds) and `id` of the last
-row on the previous page. The service fetches one extra row past `limit`
-to decide whether a next page exists: if it gets `limit+1` rows back, it
-trims to `limit` and returns `next_cursor` built from the last kept row;
-otherwise `next_cursor` is `null` and the walk is over.
-
-```json
-{ "code": 200, "message": "audit log entries retrieved",
-  "data": { "items": [ ... ], "next_cursor": "MTc4NzczMjcwMzkwNjEyMzo0Mg" } }
-```
-
-Pass that `next_cursor` back as `?cursor=` to fetch the following page.
+   index alone - correctness is unaffected, since the query's `id DESC`
+   tiebreak still produces a strict order.
 
 ## Tests
 
@@ -62,13 +46,13 @@ go test ./...
 go generate ./...   # regenerate repository mocks
 ```
 
-- `service/cursor_test.go` - cursor encode/decode round trip, malformed
-  and garbage-but-valid-base64 rejection.
-- `audit_log_integration_test.go` - migration round trip; a full cursor
-  walk over a few thousand fixture rows (including a forced tie on
-  `created_at` to exercise the `id DESC` tiebreak) that must land every
-  row exactly once with no gaps or duplicates; both endpoints' envelope
-  and validation errors.
+- `service/auditlog_service_test.go` - the ceiling-division `total_pages`
+  math and the `actor_id`/`page` validation guards.
+- `audit_log_integration_test.go` - migration round trip; a full offset
+  pagination walk over a few thousand fixture rows (including a forced tie
+  on `created_at` to exercise the `id DESC` tiebreak) that must land every
+  row exactly once with no gaps or duplicates, plus a past-the-last-page
+  request; both endpoints' envelope and validation errors.
 
 The integration tests own the database - run them against a scratch
 Postgres, not one holding data you care about.
