@@ -42,6 +42,12 @@ curl "http://localhost:8080/audit-log?actor_id=42"
 { "code": 200, "message": "audit log entries retrieved", "data": { "data": [ { "id": 2, "actor_id": 42, "action": "logout", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-27T08:25:04.1122Z" }, { "id": 1, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-27T08:25:03.9061Z" } ], "pagination": { "page": 1, "limit": 50, "total_items": 2, "total_pages": 1 } } }
 ```
 
+This plain call - just `actor_id`, no `page` or `limit` - is a valid first
+call. The client does not need to know how many pages exist ahead of time:
+`page`/`limit` default to `1`/`50`, and the response's `pagination` block
+already reports `total_items`/`total_pages`, which the client then uses to
+decide whether to fetch more.
+
 `limit` defaults to 50 and can be overridden: `?actor_id=42&limit=10`.
 
 ## 3. Walk pages
