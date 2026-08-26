@@ -41,6 +41,20 @@ func (m *MockAuditLogRepository) EXPECT() *MockAuditLogRepositoryMockRecorder {
 	return m.recorder
 }
 
+// Analyze mocks base method.
+func (m *MockAuditLogRepository) Analyze(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Analyze", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Analyze indicates an expected call of Analyze.
+func (mr *MockAuditLogRepositoryMockRecorder) Analyze(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Analyze", reflect.TypeOf((*MockAuditLogRepository)(nil).Analyze), ctx)
+}
+
 // CopyInsert mocks base method.
 func (m *MockAuditLogRepository) CopyInsert(ctx context.Context, entries []repository.AuditLog) (int64, error) {
 	m.ctrl.T.Helper()

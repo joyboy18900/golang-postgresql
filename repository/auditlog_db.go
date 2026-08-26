@@ -89,6 +89,15 @@ func (r auditLogRepositoryDB) CopyInsert(ctx context.Context, entries []AuditLog
 	return n, nil
 }
 
+func (r auditLogRepositoryDB) Analyze(ctx context.Context) error {
+	if _, err := r.pool.Exec(ctx, "ANALYZE audit_log"); err != nil {
+		logs.Error(fmt.Errorf("analyze audit log: %w", err))
+		return errs.NewUnexpectedError()
+	}
+
+	return nil
+}
+
 func (r auditLogRepositoryDB) ExplainListByActor(ctx context.Context, actorID int64, limit int) (string, error) {
 	var plan string
 	err := r.pool.QueryRow(ctx,
