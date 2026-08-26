@@ -1,103 +1,74 @@
 # golang-postgresql
 
-Postgres schema evolution and query performance, proven with real numbers:
-versioned migrations, an indexing case study, and monthly table
-partitioning with a working pruning demo. One entity, `audit_log`, carries
-the whole story: an actor's activity history query that starts unindexed,
-gets indexed, then gets partitioned by month.
+Fiber + GORM + Postgres reference: one entity, `audit_log`, with versioned
+migrations and cursor-based (keyset) pagination on its actor-activity
+listing query.
 
 ## Run
 
-### Option A: docker compose (full stack, already migrated and seeded)
-
 ```bash
 docker compose up -d --build
-docker compose logs seed --tail 5   # "seeded 1000000 rows total"
+curl -X POST http://localhost:8080/audit-log \
+  -H "Content-Type: application/json" \
+  -d '{"actor_id":42,"action":"login","entity_type":"session"}'
 curl "http://localhost:8080/audit-log?actor_id=42"
 ```
 
-Runs `migrate up` (through the partitioned schema), seeds 1,000,000 rows,
-then starts the API on `:8080`. See `curl/flow.md` for requests. **Does not
-reproduce the before/after numbers below** - the index and partitioning
-already exist by the time `app` starts. Use option B for that.
+The app runs pending migrations on startup, then serves on `:8080`. See
+`curl/flow.md` for a full walkthrough.
 
-### Option B: manual before/after reproduction
+## Endpoints
 
-Requires a local Postgres reachable via `config.yaml` (or `docker compose up
--d postgres`).
+- `POST /audit-log`
+- `GET /audit-log?actor_id=X&limit=Y&cursor=Z`
 
-```bash
-go run . migrate goto 1     # table exists, no index - the "before" state
-go run . seed 1000000       # ~1M rows, pgx CopyFrom, ANALYZE at the end
-go run . bench <actor_id>   # capture "before" numbers (pick an actor_id from the seeded data)
-go run . migrate goto 2     # add the index - the "after" state
-go run . bench <actor_id>   # capture "after" numbers
-go run . migrate goto 3     # convert to monthly partitions
-```
-
-`bench` prints a one-line summary plus the full `EXPLAIN (ANALYZE, BUFFERS,
-FORMAT JSON)` output.
+See `curl/flow.md` for full request/response examples.
 
 ## Schema (`migrations/`)
 
-1. **`0001_create_audit_log_table`** - plain, unindexed `audit_log`
-   (`actor_id`, `action`, `entity_type`, `entity_id`, `metadata jsonb`,
-   `created_at`). Deliberately the "before" state.
+1. **`0001_create_audit_log_table`** - `audit_log` (`actor_id`, `action`,
+   `entity_type`, `entity_id`, `metadata jsonb`, `created_at`). The
+   `created_at` column keeps its SQL-level `DEFAULT now()` as a safety net
+   for any row inserted outside the app; the app itself always sets
+   `created_at` client-side through GORM's `autoCreateTime` convention, so
+   that default normally never fires.
 2. **`0002_add_actor_id_index`** - composite index on `(actor_id,
-   created_at DESC)`, so it covers the `ORDER BY ... LIMIT` too.
-3. **`0003_partition_audit_log_by_month`** - converts `audit_log` to a
-   partitioned table. Postgres can't `ALTER TABLE ... PARTITION BY` an
-   existing table, so this builds a new partitioned table, copies the
-   data, rebuilds the index, then renames it into place.
+   created_at DESC)`, covering the listing query's `WHERE` and `ORDER BY`.
+   The index does not include `id`, so rows sharing the exact same
+   `created_at` are ordered by a small in-memory sort rather than the
+   index alone - correctness is unaffected, since the `id DESC` tiebreak
+   is enforced by the query itself.
 
-## Benchmark Data
+## Pagination
 
-Query: `SELECT ... FROM audit_log WHERE actor_id = $1 ORDER BY created_at
-DESC LIMIT 50`. Seeded with 1,000,000 rows across 20,000 actors.
+`GET /audit-log` uses keyset pagination, not offset. A cursor is an opaque
+base64 string encoding `created_at` (microseconds) and `id` of the last
+row on the previous page. The service fetches one extra row past `limit`
+to decide whether a next page exists: if it gets `limit+1` rows back, it
+trims to `limit` and returns `next_cursor` built from the last kept row;
+otherwise `next_cursor` is `null` and the walk is over.
 
-**Indexing** (actor `854`, 80 matching rows):
+```json
+{ "code": 200, "message": "audit log entries retrieved",
+  "data": { "items": [ ... ], "next_cursor": "MTc4NzczMjcwMzkwNjEyMzo0Mg" } }
+```
 
-| | plan | latency |
-|---|---|---|
-| before (`migrate goto 1`) | Seq Scan | 25.33 ms |
-| after (`migrate goto 2`) | Bitmap Heap Scan | 0.43 ms |
-
-~59x faster. Planner picks Bitmap Heap Scan over a plain Index Scan
-because 80 scattered matching rows make batch-fetching cheaper than an
-ordered index walk.
-
-**Partition pruning** (`created_at`-range query on the partitioned
-table): plan touches only `audit_log_y2026m08`, `Execution Time: 0.030
-ms`.
-
-| partition | rows |
-|---|---|
-| audit_log_y2026m05 | 251,958 |
-| audit_log_y2026m06 | 244,375 |
-| audit_log_y2026m07 | 251,591 |
-| audit_log_y2026m08 | 252,077 |
-
-## API
-
-- `POST /audit-log` - create one entry
-- `GET /audit-log?actor_id=X&limit=Y` - the case-study query (`limit`
-  defaults to 50)
-
-See `curl/flow.md` for examples.
+Pass that `next_cursor` back as `?cursor=` to fetch the following page.
 
 ## Tests
 
 ```bash
 go test ./...
+go generate ./...   # regenerate repository mocks
 ```
 
-- `bench_service_test.go` - parses `EXPLAIN (FORMAT JSON)` output.
-- `seed_service_test.go` - batch splitting during seeding, mocked
-  repository.
-- `audit_log_integration_test.go` - migrations round-trip; plan is a Seq
-  Scan before the index and not after; rows land in the right partition;
-  range queries prune; both endpoints return the right envelope/errors.
+- `service/cursor_test.go` - cursor encode/decode round trip, malformed
+  and garbage-but-valid-base64 rejection.
+- `audit_log_integration_test.go` - migration round trip; a full cursor
+  walk over a few thousand fixture rows (including a forced tie on
+  `created_at` to exercise the `id DESC` tiebreak) that must land every
+  row exactly once with no gaps or duplicates; both endpoints' envelope
+  and validation errors.
 
-The integration test owns its own database - run it against a scratch
-Postgres, not the `docker compose` stack from option A, or it will wipe
-that demo data.
+The integration tests own the database - run them against a scratch
+Postgres, not one holding data you care about.

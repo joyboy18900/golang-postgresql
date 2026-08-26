@@ -1,8 +1,6 @@
 # Manual test flow
 
-Walkthrough for exercising the audit log API by hand. `docker compose up`
-migrates, seeds 1,000,000 rows, and starts the server - see the README for
-the separate manual before/after indexing flow.
+Walkthrough for exercising the audit log API by hand.
 
 ## Start
 
@@ -21,24 +19,32 @@ curl -X POST http://localhost:8080/audit-log \
 ```
 
 ```json
-{ "code": 201, "message": "audit log entry created", "data": { "id": 1000001, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-26T08:25:03.9061Z" } }
+{ "code": 201, "message": "audit log entry created", "data": { "id": 1, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-26T08:25:03.9061Z" } }
 ```
 
 ## 2. List an actor's activity history
-
-This is the query the indexing case study is built around.
 
 ```bash
 curl "http://localhost:8080/audit-log?actor_id=42"
 ```
 
 ```json
-{ "code": 200, "message": "audit log entries retrieved", "data": [ { "id": 1000001, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-26T08:25:03.9061Z" } ] }
+{ "code": 200, "message": "audit log entries retrieved", "data": { "items": [ { "id": 1, "actor_id": 42, "action": "login", "entity_type": "session", "entity_id": null, "metadata": {}, "created_at": "2026-08-26T08:25:03.9061Z" } ], "next_cursor": null } }
 ```
 
 `limit` defaults to 50 and can be overridden: `?actor_id=42&limit=10`.
 
-## 3. Rejection cases
+## 3. Walk pages with the cursor
+
+When a page is full, `next_cursor` is a non-null string. Pass it back as
+`cursor` to fetch the next page; keep going until `next_cursor` is `null`.
+
+```bash
+curl "http://localhost:8080/audit-log?actor_id=42&limit=10"
+curl "http://localhost:8080/audit-log?actor_id=42&limit=10&cursor=MTc4NzczMjcwMzkwNjEyMzo0Mg"
+```
+
+## 4. Rejection cases
 
 Missing `actor_id`:
 
@@ -48,6 +54,16 @@ curl "http://localhost:8080/audit-log"
 
 ```json
 { "code": 422, "message": "actor_id query parameter is required", "data": null }
+```
+
+Malformed `cursor`:
+
+```bash
+curl "http://localhost:8080/audit-log?actor_id=42&cursor=not-a-cursor"
+```
+
+```json
+{ "code": 422, "message": "invalid cursor", "data": null }
 ```
 
 Missing required fields on create:
