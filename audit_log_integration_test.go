@@ -3,6 +3,7 @@ package main_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -151,7 +152,8 @@ func TestAuditLogHandler_CreateAndList(t *testing.T) {
 		Metadata: map[string]any{}, CreatedAt: time.Now(),
 	}
 	repo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(&created, nil)
-	repo.EXPECT().ListByActor(gomock.Any(), gomock.Any()).Return([]repository.AuditLog{created}, nil)
+	repo.EXPECT().ListByActor(gomock.Any(), gomock.Any()).
+		Return(repository.ListByActorResult{Items: []repository.AuditLog{created}, TotalItems: 1}, nil)
 
 	app := newHandlerTestApp(repo)
 
@@ -184,8 +186,35 @@ func TestAuditLogHandler_CreateAndList(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		t.Fatalf("decode list response: %v", err)
 	}
-	if len(envelope.Data.Items) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(envelope.Data.Items))
+	if len(envelope.Data.Data) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(envelope.Data.Data))
+	}
+}
+
+func TestAuditLogHandler_ListEmptyResultIsEmptyArray(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := mock_repository.NewMockAuditLogRepository(ctrl)
+	repo.EXPECT().ListByActor(gomock.Any(), gomock.Any()).
+		Return(repository.ListByActorResult{Items: []repository.AuditLog{}, TotalItems: 0}, nil)
+
+	app := newHandlerTestApp(repo)
+
+	req := httptest.NewRequest(fiber.MethodGet, "/audit-log?actor_id=42", nil)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test() error = %v", err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusOK)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	if !strings.Contains(string(body), `"data":{"data":[],`) {
+		t.Fatalf("response body = %s, want it to contain %q", body, `"data":{"data":[],`)
 	}
 }
 
@@ -256,34 +285,39 @@ func TestAuditLogCursorPagination(t *testing.T) {
 	svc := service.NewAuditLogService(repo)
 
 	seen := make(map[int64]bool, fixtureRowCount)
-	cursor := ""
-	pages := 0
-	for {
-		if pages >= maxPageWalk {
-			t.Fatalf("cursor walk did not terminate within %d pages", maxPageWalk)
-		}
-		pages++
 
+	first, err := svc.ListByActor(context.Background(), service.ListAuditLogRequest{
+		ActorID: cursorTestActorID,
+		Page:    1,
+		Limit:   pageLimit,
+	})
+	if err != nil {
+		t.Fatalf("list page 1: %v", err)
+	}
+	totalPages := first.Pagination.TotalPages
+	if totalPages <= 0 || totalPages > maxPageWalk {
+		t.Fatalf("total_pages = %d, want a value in (0, %d]", totalPages, maxPageWalk)
+	}
+	for _, item := range first.Data {
+		seen[item.ID] = true
+	}
+
+	for page := 2; page <= totalPages; page++ {
 		resp, err := svc.ListByActor(context.Background(), service.ListAuditLogRequest{
 			ActorID: cursorTestActorID,
+			Page:    page,
 			Limit:   pageLimit,
-			Cursor:  cursor,
 		})
 		if err != nil {
-			t.Fatalf("list page %d: %v", pages, err)
+			t.Fatalf("list page %d: %v", page, err)
 		}
 
-		for _, item := range resp.Items {
+		for _, item := range resp.Data {
 			if seen[item.ID] {
-				t.Fatalf("duplicate id %d on page %d", item.ID, pages)
+				t.Fatalf("duplicate id %d on page %d", item.ID, page)
 			}
 			seen[item.ID] = true
 		}
-
-		if resp.NextCursor == nil {
-			break
-		}
-		cursor = *resp.NextCursor
 	}
 
 	if len(seen) != fixtureRowCount {
