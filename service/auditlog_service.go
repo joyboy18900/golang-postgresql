@@ -40,7 +40,8 @@ func (s auditLogService) Create(ctx context.Context, req CreateAuditLogRequest) 
 		return nil, errs.NewUnexpectedError()
 	}
 
-	return toAuditLogResponse(*created), nil
+	resp := toAuditLogResponse(*created)
+	return &resp, nil
 }
 
 func (s auditLogService) ListByActor(ctx context.Context, actorID int64, limit int) ([]AuditLogResponse, error) {
@@ -59,14 +60,14 @@ func (s auditLogService) ListByActor(ctx context.Context, actorID int64, limit i
 
 	responses := make([]AuditLogResponse, len(entries))
 	for i, entry := range entries {
-		responses[i] = *toAuditLogResponse(entry)
+		responses[i] = toAuditLogResponse(entry)
 	}
 
 	return responses, nil
 }
 
-func toAuditLogResponse(entry repository.AuditLog) *AuditLogResponse {
-	return &AuditLogResponse{
+func toAuditLogResponse(entry repository.AuditLog) AuditLogResponse {
+	return AuditLogResponse{
 		ID:         entry.ID,
 		ActorID:    entry.ActorID,
 		Action:     entry.Action,
