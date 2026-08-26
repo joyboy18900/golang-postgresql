@@ -41,35 +41,6 @@ func (m *MockAuditLogRepository) EXPECT() *MockAuditLogRepositoryMockRecorder {
 	return m.recorder
 }
 
-// Analyze mocks base method.
-func (m *MockAuditLogRepository) Analyze(ctx context.Context) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Analyze", ctx)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Analyze indicates an expected call of Analyze.
-func (mr *MockAuditLogRepositoryMockRecorder) Analyze(ctx any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Analyze", reflect.TypeOf((*MockAuditLogRepository)(nil).Analyze), ctx)
-}
-
-// CopyInsert mocks base method.
-func (m *MockAuditLogRepository) CopyInsert(ctx context.Context, entries []repository.AuditLog) (int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CopyInsert", ctx, entries)
-	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// CopyInsert indicates an expected call of CopyInsert.
-func (mr *MockAuditLogRepositoryMockRecorder) CopyInsert(ctx, entries any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CopyInsert", reflect.TypeOf((*MockAuditLogRepository)(nil).CopyInsert), ctx, entries)
-}
-
 // Create mocks base method.
 func (m *MockAuditLogRepository) Create(ctx context.Context, entry repository.AuditLog) (*repository.AuditLog, error) {
 	m.ctrl.T.Helper()
@@ -83,21 +54,6 @@ func (m *MockAuditLogRepository) Create(ctx context.Context, entry repository.Au
 func (mr *MockAuditLogRepositoryMockRecorder) Create(ctx, entry any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockAuditLogRepository)(nil).Create), ctx, entry)
-}
-
-// ExplainListByActor mocks base method.
-func (m *MockAuditLogRepository) ExplainListByActor(ctx context.Context, actorID int64, limit int) (string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ExplainListByActor", ctx, actorID, limit)
-	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ExplainListByActor indicates an expected call of ExplainListByActor.
-func (mr *MockAuditLogRepositoryMockRecorder) ExplainListByActor(ctx, actorID, limit any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExplainListByActor", reflect.TypeOf((*MockAuditLogRepository)(nil).ExplainListByActor), ctx, actorID, limit)
 }
 
 // ListByActor mocks base method.

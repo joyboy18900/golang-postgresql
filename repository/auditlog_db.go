@@ -2,31 +2,47 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/gorm"
 )
 
-type auditLogRepositoryDB struct {
-	pool *pgxpool.Pool
+type auditLogRow struct {
+	ID         int64
+	ActorID    int64
+	Action     string
+	EntityType string
+	EntityID   *int64
+	Metadata   []byte `gorm:"type:jsonb"`
+	CreatedAt  time.Time
 }
 
-func NewAuditLogRepositoryDB(pool *pgxpool.Pool) AuditLogRepository {
-	return auditLogRepositoryDB{pool: pool}
+func (auditLogRow) TableName() string {
+	return "audit_log"
+}
+
+type auditLogRepositoryDB struct {
+	db *gorm.DB
+}
+
+func NewAuditLogRepositoryDB(db *gorm.DB) AuditLogRepository {
+	return auditLogRepositoryDB{db: db}
 }
 
 func (r auditLogRepositoryDB) Create(ctx context.Context, entry AuditLog) (*AuditLog, error) {
-	row := r.pool.QueryRow(ctx,
-		`INSERT INTO audit_log (actor_id, action, entity_type, entity_id, metadata)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, actor_id, action, entity_type, entity_id, metadata, created_at`,
-		entry.ActorID, entry.Action, entry.EntityType, entry.EntityID, entry.Metadata,
-	)
+	row, err := toRow(entry)
+	if err != nil {
+		return nil, fmt.Errorf("create audit log: %w", err)
+	}
 
-	var created AuditLog
-	if err := row.Scan(&created.ID, &created.ActorID, &created.Action, &created.EntityType,
-		&created.EntityID, &created.Metadata, &created.CreatedAt); err != nil {
+	if err := r.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return nil, fmt.Errorf("create audit log: %w", err)
+	}
+
+	created, err := toDomain(row)
+	if err != nil {
 		return nil, fmt.Errorf("create audit log: %w", err)
 	}
 
@@ -34,76 +50,65 @@ func (r auditLogRepositoryDB) Create(ctx context.Context, entry AuditLog) (*Audi
 }
 
 func (r auditLogRepositoryDB) ListByActor(ctx context.Context, actorID int64, limit int) ([]AuditLog, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT id, actor_id, action, entity_type, entity_id, metadata, created_at
-		 FROM audit_log
-		 WHERE actor_id = $1
-		 ORDER BY created_at DESC
-		 LIMIT $2`,
-		actorID, limit,
-	)
+	var rows []auditLogRow
+	err := r.db.WithContext(ctx).
+		Where("actor_id = ?", actorID).
+		Order("created_at DESC, id DESC").
+		Limit(limit).
+		Find(&rows).Error
 	if err != nil {
 		return nil, fmt.Errorf("list audit log by actor: %w", err)
 	}
-	defer rows.Close()
 
-	var entries []AuditLog
-	for rows.Next() {
-		var entry AuditLog
-		if err := rows.Scan(&entry.ID, &entry.ActorID, &entry.Action, &entry.EntityType,
-			&entry.EntityID, &entry.Metadata, &entry.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan audit log: %w", err)
+	entries := make([]AuditLog, len(rows))
+	for i, row := range rows {
+		entry, err := toDomain(row)
+		if err != nil {
+			return nil, fmt.Errorf("list audit log by actor: %w", err)
 		}
-		entries = append(entries, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate audit log rows: %w", err)
+		entries[i] = entry
 	}
 
 	return entries, nil
 }
 
-func (r auditLogRepositoryDB) CopyInsert(ctx context.Context, entries []AuditLog) (int64, error) {
-	rows := make([][]any, len(entries))
-	for i := range entries {
-		entry := &entries[i]
-		rows[i] = []any{entry.ActorID, entry.Action, entry.EntityType, entry.EntityID, entry.Metadata, entry.CreatedAt}
+func toRow(entry AuditLog) (auditLogRow, error) {
+	metadata := entry.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
 	}
 
-	n, err := r.pool.CopyFrom(ctx,
-		pgx.Identifier{"audit_log"},
-		[]string{"actor_id", "action", "entity_type", "entity_id", "metadata", "created_at"},
-		pgx.CopyFromRows(rows),
-	)
+	raw, err := json.Marshal(metadata)
 	if err != nil {
-		return 0, fmt.Errorf("copy insert audit log: %w", err)
+		return auditLogRow{}, fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	return n, nil
+	return auditLogRow{
+		ID:         entry.ID,
+		ActorID:    entry.ActorID,
+		Action:     entry.Action,
+		EntityType: entry.EntityType,
+		EntityID:   entry.EntityID,
+		Metadata:   raw,
+		CreatedAt:  entry.CreatedAt,
+	}, nil
 }
 
-func (r auditLogRepositoryDB) Analyze(ctx context.Context) error {
-	if _, err := r.pool.Exec(ctx, "ANALYZE audit_log"); err != nil {
-		return fmt.Errorf("analyze audit log: %w", err)
+func toDomain(row auditLogRow) (AuditLog, error) {
+	metadata := map[string]any{}
+	if len(row.Metadata) > 0 {
+		if err := json.Unmarshal(row.Metadata, &metadata); err != nil {
+			return AuditLog{}, fmt.Errorf("unmarshal metadata: %w", err)
+		}
 	}
 
-	return nil
-}
-
-func (r auditLogRepositoryDB) ExplainListByActor(ctx context.Context, actorID int64, limit int) (string, error) {
-	var plan string
-	err := r.pool.QueryRow(ctx,
-		`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
-		 SELECT id, actor_id, action, entity_type, entity_id, metadata, created_at
-		 FROM audit_log
-		 WHERE actor_id = $1
-		 ORDER BY created_at DESC
-		 LIMIT $2`,
-		actorID, limit,
-	).Scan(&plan)
-	if err != nil {
-		return "", fmt.Errorf("explain list audit log by actor: %w", err)
-	}
-
-	return plan, nil
+	return AuditLog{
+		ID:         row.ID,
+		ActorID:    row.ActorID,
+		Action:     row.Action,
+		EntityType: row.EntityType,
+		EntityID:   row.EntityID,
+		Metadata:   metadata,
+		CreatedAt:  row.CreatedAt,
+	}, nil
 }

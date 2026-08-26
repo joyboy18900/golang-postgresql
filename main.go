@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -16,8 +15,9 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/viper"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -63,16 +63,13 @@ func postgresDSN() string {
 	)
 }
 
-func initPool() *pgxpool.Pool {
-	pool, err := pgxpool.New(context.Background(), postgresDSN())
+func openGormDB() *gorm.DB {
+	db, err := gorm.Open(postgres.Open(postgresDSN()), &gorm.Config{})
 	if err != nil {
-		panic(fmt.Errorf("open postgres pool: %w", err))
-	}
-	if err := pool.Ping(context.Background()); err != nil {
-		panic(fmt.Errorf("ping postgres: %w", err))
+		panic(fmt.Errorf("open postgres: %w", err))
 	}
 
-	return pool
+	return db
 }
 
 func newMigrate() *migrate.Migrate {
@@ -124,10 +121,9 @@ func runMigrate(args []string) {
 }
 
 func runServe() {
-	pool := initPool()
-	defer pool.Close()
+	db := openGormDB()
 
-	auditLogRepo := repository.NewAuditLogRepositoryDB(pool)
+	auditLogRepo := repository.NewAuditLogRepositoryDB(db)
 	auditLogSvc := service.NewAuditLogService(auditLogRepo)
 	auditLogHdlr := handler.NewAuditLogHandler(auditLogSvc)
 
