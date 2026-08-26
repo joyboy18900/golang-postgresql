@@ -170,6 +170,12 @@ go test ./...
   `created_at`-range query prunes to one partition; the two HTTP endpoints
   return the right envelope and validation errors.
 
+The integration test takes ownership of the database it connects to - it
+drops and recreates the schema, seeds its own data, and migrates back down
+when it finishes. Run it against a scratch/throwaway Postgres, not the
+`docker compose` stack from option A above, or it will wipe the seeded demo
+data that stack is showing off.
+
 ## Not done on purpose
 
 No `pg_partman`/cron-based automatic future-partition creation, no
