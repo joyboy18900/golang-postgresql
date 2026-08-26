@@ -26,7 +26,7 @@ import (
 const (
 	cursorTestActorID = 7
 	fixtureRowCount   = 2500
-	tieRowCount       = 5
+	tieRowCount       = 25
 	pageLimit         = 20
 	maxPageWalk       = 1000
 )
