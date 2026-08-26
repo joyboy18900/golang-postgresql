@@ -1,11 +1,10 @@
 # golang-postgresql
 
 Postgres schema evolution and query performance, proven with real numbers:
-versioned migrations, an indexing case study (unindexed vs indexed
-`EXPLAIN ANALYZE`), and monthly table partitioning with a working pruning
-demo. One entity - `audit_log` - carries the whole story: a realistic
-"actor's activity history" query that starts unindexed, then gets indexed,
-then the table gets partitioned by month.
+versioned migrations, an indexing case study, and monthly table
+partitioning with a working pruning demo. One entity, `audit_log`, carries
+the whole story: an actor's activity history query that starts unindexed,
+gets indexed, then gets partitioned by month.
 
 ## Run
 
@@ -17,11 +16,10 @@ docker compose logs seed --tail 5   # "seeded 1000000 rows total"
 curl "http://localhost:8080/audit-log?actor_id=42"
 ```
 
-This runs `migrate up` (all three migrations, ending on the partitioned
-schema), seeds 1,000,000 rows, then starts the API on `:8080`. See
-`curl/flow.md` for the full request walkthrough. **This does not reproduce
-the before/after indexing numbers below** - by the time `app` starts, the
-index and partitioning already exist. Use option B for that.
+Runs `migrate up` (through the partitioned schema), seeds 1,000,000 rows,
+then starts the API on `:8080`. See `curl/flow.md` for requests. **Does not
+reproduce the before/after numbers below** - the index and partitioning
+already exist by the time `app` starts. Use option B for that.
 
 ### Option B: manual before/after reproduction
 
@@ -46,24 +44,23 @@ FORMAT JSON)` output.
    (`actor_id`, `action`, `entity_type`, `entity_id`, `metadata jsonb`,
    `created_at`). Deliberately the "before" state.
 2. **`0002_add_actor_id_index`** - `CREATE INDEX ... ON audit_log (actor_id,
-   created_at DESC)`. Composite, not `actor_id` alone, so it also covers the
-   `ORDER BY created_at DESC LIMIT` for free. A real deployment would use
-   `CREATE INDEX CONCURRENTLY` to avoid locking writers; skipped here because
-   golang-migrate runs each migration in a transaction and this demo has no
-   concurrent writers during migration.
+   created_at DESC)`. Composite, not just `actor_id`, so it also covers the
+   `ORDER BY ... LIMIT` for free. A real deployment would use `CREATE INDEX
+   CONCURRENTLY` to avoid locking writers; skipped here since golang-migrate
+   runs migrations in a transaction and this demo has no concurrent
+   writers.
 3. **`0003_partition_audit_log_by_month`** - converts `audit_log` to a
    partitioned table. Postgres can't `ALTER TABLE ... PARTITION BY` an
-   existing table, and declarative partitioning requires the partition key
-   in the primary key, so this migration builds a new partitioned table,
-   copies the data across, rebuilds the index, and renames the new table
-   into place of the old one.
+   existing table, and the partition key must be in the primary key. This
+   migration builds a new partitioned table, copies the data, rebuilds the
+   index, then renames it into place.
 
 ## Indexing case study
 
 Query: `SELECT ... FROM audit_log WHERE actor_id = $1 ORDER BY created_at
-DESC LIMIT 50` - a realistic "show this user's activity history" lookup.
-Seeded with 1,000,000 rows across 20,000 actors (actor `854` used below, 80
-matching rows - about the selectivity a real actor lookup would see).
+DESC LIMIT 50`, a user's activity history lookup. Seeded with 1,000,000
+rows across 20,000 actors (actor `854` below has 80 matching rows, a
+realistic selectivity).
 
 **Before** (`migrate goto 1`, no index):
 
@@ -80,12 +77,11 @@ filtering out 333,307 non-matching rows per worker.
 Bitmap Heap Scan using idx_audit_log_actor_id_created_at on audit_log, Execution Time: 0.43 ms
 ```
 
-**~59x faster** (25.33 ms -> 0.43 ms). The planner chose a Bitmap Heap
-Scan over a plain Index Scan because 80 matching rows scattered across the
-table make a bitmap-then-fetch cheaper than an ordered index walk - both use
-the new index; the bitmap path just batches the heap fetches. `go run .
-bench` reports this correctly by reading the index name off the nested
-`Bitmap Index Scan` node.
+**~59x faster** (25.33 ms -> 0.43 ms). The planner picked a Bitmap Heap
+Scan over a plain Index Scan because 80 scattered matching rows make
+batch-fetching cheaper than an ordered index walk. Both use the new index;
+`bench` reads the index name off the nested `Bitmap Index Scan` node to
+report it correctly.
 
 ## Partitioning
 
@@ -94,14 +90,12 @@ Partitioned by month on `created_at`, four explicit partitions
 plus an `audit_log_default` catch-all.
 
 **Why `created_at` and monthly**: audit logs are append-only and almost
-always queried by recency ("show me last month's activity" / retention
-sweeps that drop old months). Partitioning on the column every write and
-most reads touch means both inserts and range-scoped reads land in one
-partition, and old months can be dropped with `DROP TABLE` instead of a
-row-by-row `DELETE`.
+always queried by recency. Partitioning on the column every write and most
+reads touch means inserts and range reads land in one partition, and old
+months drop with `DROP TABLE` instead of a row-by-row `DELETE`.
 
-**Proof of pruning** - a `created_at`-range query only touches the matching
-partition, not all of them:
+**Proof of pruning**: a `created_at`-range query touches only the matching
+partition.
 
 ```sql
 EXPLAIN (ANALYZE, BUFFERS)
@@ -115,9 +109,9 @@ Buffers: shared hit=1
 Execution Time: 0.030 ms
 ```
 
-The plan mentions only `audit_log_y2026m08` - `m05`, `m06`, `m07`, and
-`default` never appear. Row counts confirm an even spread with nothing
-falling through to the default partition:
+The plan mentions only `audit_log_y2026m08`; `m05`, `m06`, `m07`, and
+`default` never appear. Row counts show an even spread, nothing fell into
+the default partition:
 
 | partition | rows |
 |---|---|
@@ -126,40 +120,34 @@ falling through to the default partition:
 | audit_log_y2026m07 | 251,591 |
 | audit_log_y2026m08 | 252,077 |
 
-**Tradeoffs**: the actor-lookup query above (filtering on `actor_id`, not
-`created_at`) does *not* prune - `actor_id` isn't the partition key, so that
-query still checks every partition (using each partition's own copy of the
-index). Partitioning and the `actor_id` index solve different problems and
+**Tradeoffs**: the actor-lookup query doesn't prune, since `actor_id` isn't
+the partition key; it still checks every partition (via each partition's
+own index copy). Partitioning and the index solve different problems, and
 both are needed. Rows outside the four declared months land in
-`audit_log_default`; promoting them into a proper monthly partition later
-needs a manual `ALTER TABLE ... DETACH PARTITION` plus backfill - there's no
-automatic rebalancing. A production setup would add `pg_partman` or a cron
-job to pre-create next month's partition ahead of time; both are out of
-scope here.
+`audit_log_default`; moving them into a real partition later needs a manual
+`DETACH PARTITION` plus backfill, with no automatic rebalancing. A
+production setup would add `pg_partman` or a cron job to pre-create next
+month's partition; out of scope here.
 
-Migration `0003` also leaves the pre-partition table behind, renamed to
-`audit_log_unpartitioned` - it is never dropped by `up`, because `down`
-renames it back into place to roll the migration back. That means once
-partitioned, both copies of the data sit on disk at once (the full
-pre-partition snapshot plus the partitioned copy), and rolling `0003` back
-restores that snapshot rather than current state - any rows written after
-partitioning are not in `audit_log_unpartitioned` and are lost from a
-rollback's point of view.
+Migration `0003` also leaves the pre-partition table behind as
+`audit_log_unpartitioned`. `up` never drops it, because `down` needs it to
+roll back. Both copies sit on disk at once, and rolling `0003` back
+restores that old snapshot, not current state - rows written after
+partitioning aren't in it and are lost from a rollback's point of view.
 
 ## API
 
 Two endpoints, standard envelope (`{code, message, data}`):
 
 - `POST /audit-log` - create one entry
-- `GET /audit-log?actor_id=X&limit=Y` - the case-study query itself
-  (`limit` defaults to 50)
+- `GET /audit-log?actor_id=X&limit=Y` - the case-study query (`limit`
+  defaults to 50)
 
-See `curl/flow.md` for full request/response examples.
+See `curl/flow.md` for examples.
 
-`migrate`, `seed`, and `bench` are CLI subcommands (`go run . <cmd>`), not
-HTTP endpoints - seeding a million rows and running `EXPLAIN ANALYZE` are
-one-time proof steps for this README, not things an API client should be
-able to trigger.
+`migrate`, `seed`, and `bench` stay CLI subcommands (`go run . <cmd>`), not
+endpoints - they're one-time proof steps for this README, not things an API
+client should trigger.
 
 ## Tests
 
@@ -167,23 +155,21 @@ able to trigger.
 go test ./...
 ```
 
-- `service/bench_service_test.go` - unit tests for parsing `EXPLAIN (FORMAT
-  JSON)` output, including the Bitmap Heap Scan / parallel Seq Scan shapes
-  real Postgres actually returns at this data size.
-- `service/seed_service_test.go` - unit test for batch splitting during
-  seeding, with a mocked repository.
-- `audit_log_integration_test.go` - against a real Postgres: migrating
-  through all three versions and back down round-trips cleanly; the actor
-  query's plan contains a Seq Scan before the index and no longer does
-  after; a row lands in the correct month's partition table; a
-  `created_at`-range query prunes to one partition; the two HTTP endpoints
-  return the right envelope and validation errors.
+- `service/bench_service_test.go` - parses `EXPLAIN (FORMAT JSON)` output,
+  including the Bitmap Heap Scan / parallel Seq Scan shapes Postgres
+  actually returns at this scale.
+- `service/seed_service_test.go` - batch splitting during seeding, with a
+  mocked repository.
+- `audit_log_integration_test.go` - against a real Postgres: migrations
+  round-trip cleanly; the actor query's plan is a Seq Scan before the index
+  and not after; a row lands in the right month's partition; a
+  `created_at`-range query prunes to one partition; both endpoints return
+  the right envelope and validation errors.
 
-The integration test takes ownership of the database it connects to - it
-drops and recreates the schema, seeds its own data, and migrates back down
-when it finishes. Run it against a scratch/throwaway Postgres, not the
-`docker compose` stack from option A above, or it will wipe the seeded demo
-data that stack is showing off.
+The integration test owns the database it connects to: it drops the
+schema, seeds its own data, and migrates back down when done. Run it
+against a scratch Postgres, not the `docker compose` stack from option A,
+or it will wipe that demo data.
 
 ## Not done on purpose
 
