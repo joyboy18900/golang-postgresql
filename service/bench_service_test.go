@@ -46,6 +46,12 @@ func TestParsePlan(t *testing.T) {
 			wantSubstr: []string{"Bitmap Heap Scan using idx_audit_log_actor_id_created_at on audit_log"},
 		},
 		{
+			name: "index only scan reports its own index name directly",
+			rawJSON: `[{"Plan":{"Node Type":"Index Only Scan","Relation Name":"audit_log",` +
+				`"Index Name":"idx_audit_log_actor_id_created_at"},"Execution Time":0.3}]`,
+			wantSubstr: []string{"Index Only Scan using idx_audit_log_actor_id_created_at on audit_log"},
+		},
+		{
 			name:       "no scan node falls back to root node type",
 			rawJSON:    `[{"Plan":{"Node Type":"Result"},"Execution Time":0.01}]`,
 			wantSubstr: []string{"Result", "0.01 ms"},

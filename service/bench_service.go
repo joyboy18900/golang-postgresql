@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"golang-postgresql/repository"
 )
@@ -50,7 +49,7 @@ func ParsePlan(rawJSON string) (*QueryPlanResult, error) {
 	output := outputs[0]
 	scan, found := findScanNode(output.Plan)
 	if !found {
-		scan = scanMatch{node: output.Plan}
+		scan = output.Plan
 	}
 
 	summary := fmt.Sprintf("%s, Execution Time: %.2f ms", describeScanNode(scan), output.ExecutionTime)
@@ -58,37 +57,38 @@ func ParsePlan(rawJSON string) (*QueryPlanResult, error) {
 	return &QueryPlanResult{Summary: summary, RawPlan: rawJSON}, nil
 }
 
-type scanMatch struct {
-	node      planNode
-	indexName string
-}
-
-func findScanNode(node planNode) (scanMatch, bool) {
-	switch {
-	case strings.Contains(node.NodeType, "Bitmap Heap Scan"):
-		indexName := ""
-		if len(node.Plans) > 0 {
-			indexName = node.Plans[0].IndexName
-		}
-		return scanMatch{node: node, indexName: indexName}, true
-	case strings.Contains(node.NodeType, "Seq Scan"), strings.Contains(node.NodeType, "Index Scan"):
-		return scanMatch{node: node, indexName: node.IndexName}, true
+func findScanNode(node planNode) (planNode, bool) {
+	if node.RelationName != "" {
+		return withIndexName(node), true
 	}
 	for _, child := range node.Plans {
 		if found, ok := findScanNode(child); ok {
 			return found, true
 		}
 	}
-	return scanMatch{}, false
+	return planNode{}, false
 }
 
-func describeScanNode(s scanMatch) string {
+func withIndexName(node planNode) planNode {
+	if node.IndexName != "" {
+		return node
+	}
+	for _, child := range node.Plans {
+		if child.IndexName != "" {
+			node.IndexName = child.IndexName
+			return node
+		}
+	}
+	return node
+}
+
+func describeScanNode(node planNode) string {
 	switch {
-	case s.indexName != "":
-		return fmt.Sprintf("%s using %s on %s", s.node.NodeType, s.indexName, s.node.RelationName)
-	case s.node.RelationName != "":
-		return fmt.Sprintf("%s on %s", s.node.NodeType, s.node.RelationName)
+	case node.IndexName != "":
+		return fmt.Sprintf("%s using %s on %s", node.NodeType, node.IndexName, node.RelationName)
+	case node.RelationName != "":
+		return fmt.Sprintf("%s on %s", node.NodeType, node.RelationName)
 	default:
-		return s.node.NodeType
+		return node.NodeType
 	}
 }
