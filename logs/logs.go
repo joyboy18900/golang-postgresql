@@ -5,27 +5,27 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-var log *zap.Logger
+var sugar *zap.SugaredLogger
 
 func init() {
 	cfg := zap.NewProductionConfig()
 	cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
-	l, err := cfg.Build()
+	log, err := cfg.Build()
 	if err != nil {
 		panic(err)
 	}
-	log = l
+	sugar = log.Sugar()
 }
 
 func Info(args ...interface{}) {
-	log.Sugar().Info(args...)
+	sugar.Info(args...)
 }
 
 func Debug(args ...interface{}) {
-	log.Sugar().Debug(args...)
+	sugar.Debug(args...)
 }
 
 func Error(args ...interface{}) {
-	log.Sugar().Error(args...)
+	sugar.Error(args...)
 }
