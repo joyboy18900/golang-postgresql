@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"golang-postgresql/handler"
@@ -22,19 +21,22 @@ import (
 
 func main() {
 	initConfig()
+	runMigrations()
 
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: go run . <migrate|serve> [args]")
-		os.Exit(1)
-	}
+	db := openGormDB()
 
-	switch os.Args[1] {
-	case "migrate":
-		runMigrate(os.Args[2:])
-	case "serve":
-		runServe()
-	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q\n", os.Args[1])
+	auditLogRepo := repository.NewAuditLogRepositoryDB(db)
+	auditLogSvc := service.NewAuditLogService(auditLogRepo)
+	auditLogHdlr := handler.NewAuditLogHandler(auditLogSvc)
+
+	app := fiber.New()
+	app.Post("/audit-log", auditLogHdlr.Create)
+	app.Get("/audit-log", auditLogHdlr.ListByActor)
+
+	port := viper.GetString("app.port")
+	logs.Info("server started on port " + port)
+	if err := app.Listen(":" + port); err != nil {
+		logs.Error(err)
 		os.Exit(1)
 	}
 }
@@ -72,69 +74,18 @@ func openGormDB() *gorm.DB {
 	return db
 }
 
-func newMigrate() *migrate.Migrate {
+func runMigrations() {
 	dsn := strings.Replace(postgresDSN(), "postgres://", "pgx5://", 1)
 
 	m, err := migrate.New("file://migrations", dsn)
 	if err != nil {
 		panic(fmt.Errorf("new migrate: %w", err))
 	}
-
-	return m
-}
-
-func runMigrate(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: migrate <up|down|goto N>")
-		os.Exit(1)
-	}
-
-	m := newMigrate()
 	defer m.Close()
 
-	var err error
-	switch args[0] {
-	case "up":
-		err = m.Up()
-	case "down":
-		err = m.Down()
-	case "goto":
-		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: migrate goto N")
-			os.Exit(1)
-		}
-		var version int
-		version, err = strconv.Atoi(args[1])
-		if err == nil {
-			err = m.Migrate(uint(version))
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "unknown migrate subcommand %q\n", args[0])
-		os.Exit(1)
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		panic(fmt.Errorf("migrate up: %w", err))
 	}
 
-	if err != nil && err != migrate.ErrNoChange {
-		panic(fmt.Errorf("migrate %s: %w", args[0], err))
-	}
-
-	logs.Info("migrate " + args[0] + " complete")
-}
-
-func runServe() {
-	db := openGormDB()
-
-	auditLogRepo := repository.NewAuditLogRepositoryDB(db)
-	auditLogSvc := service.NewAuditLogService(auditLogRepo)
-	auditLogHdlr := handler.NewAuditLogHandler(auditLogSvc)
-
-	app := fiber.New()
-	app.Post("/audit-log", auditLogHdlr.Create)
-	app.Get("/audit-log", auditLogHdlr.ListByActor)
-
-	port := viper.GetString("app.port")
-	logs.Info("server started on port " + port)
-	if err := app.Listen(":" + port); err != nil {
-		logs.Error(err)
-		os.Exit(1)
-	}
+	logs.Info("migrations up to date")
 }
