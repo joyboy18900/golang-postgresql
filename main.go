@@ -128,13 +128,17 @@ func runMigrate(args []string) {
 }
 
 func runSeed(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: seed rowCount")
-		os.Exit(1)
+	rowCount := viper.GetInt("seed.row_count")
+	if len(args) >= 1 {
+		var err error
+		rowCount, err = strconv.Atoi(args[0])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "row count must be an integer")
+			os.Exit(1)
+		}
 	}
-	rowCount, err := strconv.Atoi(args[0])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "row count must be an integer")
+	if rowCount <= 0 {
+		fmt.Fprintln(os.Stderr, "usage: seed [rowCount] (or set seed.row_count in config.yaml)")
 		os.Exit(1)
 	}
 
