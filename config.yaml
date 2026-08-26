@@ -1,0 +1,15 @@
+app:
+  port: 8080
+
+db:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: postgres
+  name: golang_postgresql
+  sslmode: disable
+
+seed:
+  row_count: 1000000
+  actor_cardinality: 20000
+  batch_size: 10000
