@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"golang-postgresql/errs"
+	"golang-postgresql/logs"
 	"golang-postgresql/repository"
 )
 
@@ -35,7 +36,8 @@ func (s auditLogService) Create(ctx context.Context, req CreateAuditLogRequest) 
 		Metadata:   metadata,
 	})
 	if err != nil {
-		return nil, err
+		logs.Error(err)
+		return nil, errs.NewUnexpectedError()
 	}
 
 	return toAuditLogResponse(*created), nil
@@ -51,7 +53,8 @@ func (s auditLogService) ListByActor(ctx context.Context, actorID int64, limit i
 
 	entries, err := s.repo.ListByActor(ctx, actorID, limit)
 	if err != nil {
-		return nil, err
+		logs.Error(err)
+		return nil, errs.NewUnexpectedError()
 	}
 
 	responses := make([]AuditLogResponse, len(entries))

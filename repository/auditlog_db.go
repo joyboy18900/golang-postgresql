@@ -6,9 +6,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"golang-postgresql/errs"
-	"golang-postgresql/logs"
 )
 
 type auditLogRepositoryDB struct {
@@ -30,8 +27,7 @@ func (r auditLogRepositoryDB) Create(ctx context.Context, entry AuditLog) (*Audi
 	var created AuditLog
 	if err := row.Scan(&created.ID, &created.ActorID, &created.Action, &created.EntityType,
 		&created.EntityID, &created.Metadata, &created.CreatedAt); err != nil {
-		logs.Error(fmt.Errorf("create audit log: %w", err))
-		return nil, errs.NewUnexpectedError()
+		return nil, fmt.Errorf("create audit log: %w", err)
 	}
 
 	return &created, nil
@@ -47,8 +43,7 @@ func (r auditLogRepositoryDB) ListByActor(ctx context.Context, actorID int64, li
 		actorID, limit,
 	)
 	if err != nil {
-		logs.Error(fmt.Errorf("list audit log by actor: %w", err))
-		return nil, errs.NewUnexpectedError()
+		return nil, fmt.Errorf("list audit log by actor: %w", err)
 	}
 	defer rows.Close()
 
@@ -57,14 +52,12 @@ func (r auditLogRepositoryDB) ListByActor(ctx context.Context, actorID int64, li
 		var entry AuditLog
 		if err := rows.Scan(&entry.ID, &entry.ActorID, &entry.Action, &entry.EntityType,
 			&entry.EntityID, &entry.Metadata, &entry.CreatedAt); err != nil {
-			logs.Error(fmt.Errorf("scan audit log: %w", err))
-			return nil, errs.NewUnexpectedError()
+			return nil, fmt.Errorf("scan audit log: %w", err)
 		}
 		entries = append(entries, entry)
 	}
 	if err := rows.Err(); err != nil {
-		logs.Error(fmt.Errorf("iterate audit log rows: %w", err))
-		return nil, errs.NewUnexpectedError()
+		return nil, fmt.Errorf("iterate audit log rows: %w", err)
 	}
 
 	return entries, nil
@@ -82,8 +75,7 @@ func (r auditLogRepositoryDB) CopyInsert(ctx context.Context, entries []AuditLog
 		pgx.CopyFromRows(rows),
 	)
 	if err != nil {
-		logs.Error(fmt.Errorf("copy insert audit log: %w", err))
-		return 0, errs.NewUnexpectedError()
+		return 0, fmt.Errorf("copy insert audit log: %w", err)
 	}
 
 	return n, nil
@@ -91,8 +83,7 @@ func (r auditLogRepositoryDB) CopyInsert(ctx context.Context, entries []AuditLog
 
 func (r auditLogRepositoryDB) Analyze(ctx context.Context) error {
 	if _, err := r.pool.Exec(ctx, "ANALYZE audit_log"); err != nil {
-		logs.Error(fmt.Errorf("analyze audit log: %w", err))
-		return errs.NewUnexpectedError()
+		return fmt.Errorf("analyze audit log: %w", err)
 	}
 
 	return nil
@@ -110,8 +101,7 @@ func (r auditLogRepositoryDB) ExplainListByActor(ctx context.Context, actorID in
 		actorID, limit,
 	).Scan(&plan)
 	if err != nil {
-		logs.Error(fmt.Errorf("explain list audit log by actor: %w", err))
-		return "", errs.NewUnexpectedError()
+		return "", fmt.Errorf("explain list audit log by actor: %w", err)
 	}
 
 	return plan, nil
