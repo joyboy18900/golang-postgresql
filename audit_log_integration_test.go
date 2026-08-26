@@ -19,6 +19,16 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/mock/gomock"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+)
+
+const (
+	cursorTestActorID = 7
+	fixtureRowCount   = 2500
+	tieRowCount       = 5
+	pageLimit         = 20
+	maxPageWalk       = 1000
 )
 
 const (
@@ -39,6 +49,25 @@ func connectTestPool(t *testing.T) *pgxpool.Pool {
 	}
 
 	return pool
+}
+
+func connectTestGormDB(t *testing.T) *gorm.DB {
+	t.Helper()
+
+	db, err := gorm.Open(postgres.Open(testPostgresDSN), &gorm.Config{})
+	if err != nil {
+		t.Skipf("skipping integration test: open gorm db: %v", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Skipf("skipping integration test: gorm db handle: %v", err)
+	}
+	if err := sqlDB.PingContext(context.Background()); err != nil {
+		t.Skipf("skipping integration test: postgres not reachable: %v", err)
+	}
+
+	return db
 }
 
 func newTestMigrate(t *testing.T) *migrate.Migrate {
@@ -173,5 +202,91 @@ func TestAuditLogHandler_ListRequiresActorID(t *testing.T) {
 	}
 	if resp.StatusCode != fiber.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusUnprocessableEntity)
+	}
+}
+
+type auditLogFixtureRow struct {
+	ActorID    int64
+	Action     string
+	EntityType string
+	Metadata   []byte    `gorm:"type:jsonb"`
+	CreatedAt  time.Time `gorm:"autoCreateTime:false"`
+}
+
+func (auditLogFixtureRow) TableName() string { return "audit_log" }
+
+func TestAuditLogCursorPagination(t *testing.T) {
+	db := connectTestGormDB(t)
+
+	if err := db.Exec("DELETE FROM audit_log WHERE actor_id = ?", cursorTestActorID).Error; err != nil {
+		t.Fatalf("reset fixture rows: %v", err)
+	}
+
+	base := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+	rows := make([]auditLogFixtureRow, fixtureRowCount)
+	for i := range rows {
+		createdAt := base.Add(time.Duration(i) * time.Second)
+		if i < tieRowCount {
+			createdAt = base
+		}
+		rows[i] = auditLogFixtureRow{
+			ActorID:    cursorTestActorID,
+			Action:     "login",
+			EntityType: "session",
+			Metadata:   []byte("{}"),
+			CreatedAt:  createdAt,
+		}
+	}
+	if err := db.CreateInBatches(&rows, 500).Error; err != nil {
+		t.Fatalf("seed fixture rows: %v", err)
+	}
+
+	var tieCount int64
+	err := db.Raw("SELECT COUNT(*) FROM audit_log WHERE actor_id = ? AND created_at = ?", cursorTestActorID, base).
+		Scan(&tieCount).Error
+	if err != nil {
+		t.Fatalf("count tie rows: %v", err)
+	}
+	if tieCount != tieRowCount {
+		t.Fatalf("expected %d fixture rows sharing created_at %v, got %d - tiebreak is not exercised",
+			tieRowCount, base, tieCount)
+	}
+
+	repo := repository.NewAuditLogRepositoryDB(db)
+	svc := service.NewAuditLogService(repo)
+
+	seen := make(map[int64]bool, fixtureRowCount)
+	cursor := ""
+	pages := 0
+	for {
+		if pages >= maxPageWalk {
+			t.Fatalf("cursor walk did not terminate within %d pages", maxPageWalk)
+		}
+		pages++
+
+		resp, err := svc.ListByActor(context.Background(), service.ListAuditLogRequest{
+			ActorID: cursorTestActorID,
+			Limit:   pageLimit,
+			Cursor:  cursor,
+		})
+		if err != nil {
+			t.Fatalf("list page %d: %v", pages, err)
+		}
+
+		for _, item := range resp.Items {
+			if seen[item.ID] {
+				t.Fatalf("duplicate id %d on page %d", item.ID, pages)
+			}
+			seen[item.ID] = true
+		}
+
+		if resp.NextCursor == nil {
+			break
+		}
+		cursor = *resp.NextCursor
+	}
+
+	if len(seen) != fixtureRowCount {
+		t.Fatalf("walked %d distinct rows, want %d", len(seen), fixtureRowCount)
 	}
 }
