@@ -1,5 +1,5 @@
 services:
-  postgres:
+  db:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: golang_postgresql
@@ -13,28 +13,14 @@ services:
       timeout: 5s
       retries: 5
 
-  migrate:
-    build: .
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: golang_postgresql
-      DB_SSLMODE: disable
-    command: ["migrate", "up"]
-
   app:
     build: .
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      db:
+        condition: service_healthy
     environment:
       APP_PORT: 8080
-      DB_HOST: postgres
+      DB_HOST: db
       DB_PORT: 5432
       DB_USER: postgres
       DB_PASSWORD: postgres
@@ -42,4 +28,3 @@ services:
       DB_SSLMODE: disable
     ports:
       - "8080:8080"
-    command: ["serve"]
