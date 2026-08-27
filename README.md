@@ -36,14 +36,14 @@ See `curl/flow.md` for full request/response examples.
    created_at DESC)`, covering the listing query's `WHERE` and `ORDER BY`.
    The index does not include `id`, so rows sharing the exact same
    `created_at` are ordered by a small in-memory sort rather than the
-   index alone - correctness is unaffected, since the query's `id DESC`
-   tiebreak still produces a strict order.
+   index alone. Correctness is unaffected: the query's `id DESC` tiebreak
+   still produces a strict order.
 
 ## Tests
 
 ```bash
 go test ./...
-go generate ./...   # regenerate repository mocks
+go generate ./...   # regenerate repository and service mocks
 ```
 
 - `service/auditlog_service_test.go` - the ceiling-division `total_pages`
@@ -54,5 +54,5 @@ go generate ./...   # regenerate repository mocks
   row exactly once with no gaps or duplicates, plus a past-the-last-page
   request; both endpoints' envelope and validation errors.
 
-The integration tests own the database - run them against a scratch
+The integration tests own the database. Run them against a scratch
 Postgres, not one holding data you care about.
